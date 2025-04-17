@@ -1,0 +1,10 @@
+load-cred foo "certfile=path/to/certificate.pem;keyfile=path/to/private_key.pem"
+list
+# fwd to nginx 
+add-poll foo "encin=1;encout=0;portin=2443;portout=80;ipin=127.0.0.1;ipout=127.0.0.1" 
+poll-stats "cmd=dump-off"
+launch-poll
+drop-uid
+
+
+
