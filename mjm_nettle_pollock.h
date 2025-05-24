@@ -18,6 +18,9 @@
 #include "mjm_string_kvp.h"
 #include "mjm_generic_iterators.h"
 
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+
 #include "mjm_nettle_creds.h"
 //#include "mjm_nettle_pipe.h"
 //#include "mjm_nettle_server.h"
@@ -28,6 +31,7 @@
 #include "mjm_nettle_sock_info.h"
 #include "mjm_nettle_sock_funcs.h"
 #include "mjm_nettle_saver.h"
+#include "mjm_nettle_io.h"
 #include "mjm_pollfds.h"
 #include "mjm_ya_hex_dump.h"
 
@@ -151,6 +155,7 @@ typedef mjm_nettle_thread<Tr,Myt> PollingThread;
 typedef std::map<int,SockInfo> SockMap;
 typedef mjm_ya_hex_dump<Tr> YaHex; 
 typedef mjm_nettle_saver<Tr> Saver;
+typedef mjm_nettle_io<Tr> NettleIO;
 
 class _pipe  
 {
@@ -162,10 +167,17 @@ _pipe() {Init_pipe(); }
 _pipe(const Line & l,  const IdxTy first ) { Init_pipe(l,first); }
 _pipe(const StrTy & s,  const IdxTy flags ) { Init_pipe(s,flags); }
 _pipe(const StrTy & s, Creds* p_c,  const IdxTy flags ) { Init_pipe(s,p_c,flags); }
+//Pipe p(sin,&cred,nio,flags);
+_pipe(const StrTy & s, Creds* p_c,  NettleIO * nio, const IdxTy flags ) { Init_pipe(s,p_c,nio,flags); }
 _pipe(const Ragged & r, const IdxTy first,const IdxTy i0, const IdxTy flags ) 
 {Init_pipe(r,first,i0,flags); } 
 bool encrypt_in() const { return (m_creds!=0)&&(Bit(enc_in,0));} 
 bool encrypt_out() const { return (m_creds!=0)&&(Bit(enc_out,0));} 
+// do not make server listen 
+bool inbound_nio() const { return m_inbound_nio; }
+// do not make outbound conn
+bool outbound_nio() const { return m_outbound_nio; }
+ 
 StrTy save( const IdxTy flags=0) const { return Save_pipe(flags); } 
 StrTy dump( const IdxTy flags=0) const { return Dump_pipe(flags); } 
 void setup(SockInfo & si ) const { Setup(si); } 
@@ -232,7 +244,7 @@ Ss ss;
 // ss<<MMPR4(); 
 ss<<MMPR4(ip_in, ip_out, port_in, port_out);
 if (m_creds) ss<<MMPR( m_creds->dump());
-ss<<MMPR2( enc_in,enc_out); 
+ss<<MMPR3( enc_in,enc_out,m_pnio); 
 return ss.str(); 
 } // Dump 
 
@@ -241,6 +253,16 @@ void Free_pipe()
 {
 
 } // Free_pipe
+void Init_pipe(const StrTy & s, Creds* p_c,  NettleIO * nio, const IdxTy flags ) 
+{ 
+//Init_pipe(s,p_c,nio,flags); 
+//void Init_pipe(const StrTy & s,   Creds* p_c, const IdxTy flags ) 
+Init_pipe(s,p_c,flags);
+m_pnio=nio;
+if (m_pnio) if (ip_in.length()==0) m_inbound_nio=true;
+if (m_pnio) if (ip_out.length()==0) m_outbound_nio=true;
+// now determine if anything to do 
+}
 
 void Init_pipe()
 {
@@ -249,6 +271,9 @@ port_out=BAD;
 m_creds=0;
 enc_in=1;
 enc_out=1;
+m_pnio=0;
+m_inbound_nio=false;
+m_outbound_nio=false;
 } // Init_pipe
 
 // _pipeMEMBERS
@@ -261,14 +286,17 @@ si.port_out=port_out;
 si.m_creds=m_creds;
 si.enc_in=enc_in;
 si.enc_out=enc_out;
-
+si.m_pnio=m_pnio;
  }  // Setup
 
 public:
+// in is server listen port, out is outound conn 
 StrTy ip_in, ip_out;
 IdxTy port_in, port_out;
 Creds * m_creds;
 IdxTy enc_in,enc_out; 
+NettleIO * m_pnio;
+bool m_inbound_nio,m_outbound_nio;
 }; // _pipe
 
  class _sock_drawer  
@@ -331,7 +359,7 @@ MM_LOOP(ii,dvec) {
 //const auto jj=(m_socks.find((*ii))); 
 const auto jj=(m_sock_map.find((*ii))); 
 //if (jj!=m_socks.end()) m_socks.erase(jj); 
-if (jj!=m_sock_map.end()) m_sock_map.erase(jj); 
+if (jj!=m_sock_map.end()) { (*jj).second.shutdown();   m_sock_map.erase(jj);  } 
 else { MM_ERR(" wtffff "<<MMPR(*ii)) }
 }
 //MM_ERR(" done with soxx erase ")
@@ -341,6 +369,11 @@ if (dvec.size())
 
 
 } // clean 
+void shutdown()
+{
+MM_LOOP(ii,m_sock_map) { (*ii).second.shutdown(); } 
+m_sock_map.clear();
+} // shutdown
 
 SockMap & map() { return m_sock_map;}
 const SockMap & map() const  { return m_sock_map;}
@@ -414,7 +447,8 @@ SockMap m_sock_map;
 typedef _sock_drawer SockDrawer;
 
 typedef _pipe Pipe;
-typedef std::map<IdxTy, Pipe> PipeMap;
+//typedef std::map<IdxTy, Pipe> PipeMap;
+typedef std::map<StrTy, Pipe> PipeMap;
 
 // API
 
@@ -427,12 +461,25 @@ IdxTy  start() {PollingLoop(); return 0; }
 // called by user seeking to launch accept thread 
 IdxTy  launch(const StrTy & s, const IdxTy flags=0 ) {Launch(s); return 0; }
 IdxTy size() const { return m_size; }
-// no ctor for this no init()
+// no ctor for this no init() use to add pipes
 void load(const StrTy & sin,Creds & cred, const IdxTy flags) {Init(sin,cred, flags); }
 void load(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
 void load(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
 void dumper_active(const bool a) { m_dumper.active(a); } 
 void save(const StrTy & fn,const StrTy &s) {Save(fn,s); }
+
+void add_pipe(const StrTy & sin, NettleIO * nio, const IdxTy flags)
+{
+Pipe p(sin,0,nio,flags);
+Add(p,sin,flags);
+}
+void add_pipe(const StrTy & sin, Creds & cred, NettleIO * nio, const IdxTy flags)
+{
+//BaseParams kvp(sin);
+Pipe p(sin,&cred,nio,flags);
+Add(p,sin,flags);
+} // add_pipe 
+
 
 StrTy xxx_test(const StrTy & sin, const IdxTy flags) 
 { return XXX_test(sin,flags); } 
@@ -512,16 +559,21 @@ while (true)
 ExitSerial(0);
 // hopefully this can not throw lol 
 try { usleep(m_mu_sleep); } catch (...) {}
+// the que's probably don't need syncronization now... 
 EnterSerial(0);
 if (m_done){ MM_ERR(" Poll loop exists on m_done ")  break; } 
 FixFdss();
  rc = poll(m_fds.fdss(), m_fds.n(), timeout);
     if (rc < 0) { MM_ERR("  poll() failed"<<MMPR2(rc,m_funcs.eText())); break; }
+// FIXME now need short timeout to poll other crap if nothing active
+// longer timeout or sleep... 
+// don't want continue here now but jump to NettleIO or poll that first
+// continue doesn't save much either. 
 if (rc==0) continue;
 // find the active fd's for read and accept and write 
 std::vector<int> v;
 m_fds.non_zeds(v,rc);
-if (m_flow_msg) { MM_ERR(" events "<<MMPR2(m_fds.n(),v.size())) } 
+//if (m_flow_msg) { MM_ERR(" events "<<MMPR2(m_fds.n(),v.size())) } 
 MM_LOOP(ii,v)
 {
 //MM_ERR(MMPR(*ii))
@@ -558,6 +610,10 @@ fds.revents=0;
 } // ii 
 //MM_ERR(" ii loop done") 
 } // true
+
+// forgot to close all socks although maybe not?
+m_sd.shutdown();
+
 ExitSerial(0);
 return 0;
 } // PollingLoop 
@@ -582,17 +638,18 @@ SockInfo si=m_sd.get(sock);
             return 0; 
           }
 IdxTy pos=m_fds.add_input(new_sd);
-if (m_flow_msg) { MM_ERR(MMPR4(__FUNCTION__,sock,new_sd,si.sock())) } 
-// this should probably be offline... 
+if (m_flow_msg) { MM_ERR(MMPR4(__FUNCTION__,sock,new_sd,si.sock())<<MMPR(pos)) } 
+// TODO FIXME this should probably be offline could halt everything doh ... 
 //pickup pipe and cred into 
 // need to create output sock and fwd and rev que's
 si.sock(new_sd);
 //m_socks[new_sd]=si;
 m_sd.set(si);
+if (!si.nio()) {
 // open output end of the sock pipe...
 int clsock=m_funcs.connect(si);
 Mate(clsock, new_sd,si);
-
+}
 } // while 
 return 0; 
 } // Accepts
@@ -607,7 +664,7 @@ m_sd.set(si); SockInfo & sin=m_sd.get(clsock); sin.mate(new_sd);
 m_sd.get(new_sd).mate(clsock); 
 // TODO these do nothing now as its fixed at end 
 IdxTy pos=m_fds.add_output(clsock);
-if (m_flow_msg) { MM_ERR(" remote established "<<MMPR(clsock))}
+if (m_flow_msg) { MM_ERR(" remote established "<<MMPR2(clsock,pos))}
 }
 else MM_ERR(" remote connect failed ")
 
@@ -616,11 +673,95 @@ else MM_ERR(" remote connect failed ")
 ////////////////////////////////////////////
 IdxTy Inputs(const int sock)
 {
+if (m_flow_msg){ MM_ERR(" inputs "<<MMPR(sock))}
 //MM_ERR(" inputs "<<MMPR(sock)) 
 //char buffer[1<<14];
-IdxTy rct=0;
 SockInfo& si=m_sd.get(sock); // m_socks[sock];
-SockInfo& sim=m_sd.get(si.mate()); // m_socks[sock];
+
+bool is_nio=si.nio();
+if (is_nio) return InputsNio(sock,si);
+return InputsMate(sock,si);
+}
+IdxTy InputsNio(const IdxTy sock, SockInfo & si)
+{
+NettleIO * pnio=si.pnio();
+//auto & q=pnio->que();
+int rct=9; 
+
+StrTy xfer=m_funcs.peer(sock)+"..."+pnio->dump();
+if (m_flow_msg){ MM_ERR(" inputs "<<MMPR(xfer))}
+
+//MM_ERR(" input  conn ")
+while ( true)
+//do 
+{
+auto & q=si.m_que;
+IdxTy max=q.space();
+//MM_ERR(" fick "<<MMPR2(q.dump(),max))
+if (max<m_min_max)  break;
+int rc=0;
+Ss ss; ss<<si.dump()<<MMPR(m_funcs.peer(sock));
+m_dumper.annotate(ss.str());
+char * buffer= new char[max];
+//MM_ERR(MMPR4(max,sizeof(buffer),max,rct))
+try {  
+if (si.encoded())
+rc  = SSL_read(si.m_ssl, buffer, max);
+  else      rc = recv(sock, buffer, max, 0);
+if (rc>0){ rct+=rc;  q.write(buffer,rc,0);
+pnio->new_data(q,rc);
+m_dumper.print(buffer,rc); 
+//m_saver.out(si.sock_session(), sim.sock_session(), buffer, rc);
+m_saver.out(xfer, buffer, rc);
+} 
+
+} catch (... ) { MM_ERR(" read threw "); }
+delete[] buffer;
+          if (rc < 0)
+          {
+            if (errno != EWOULDBLOCK)
+            {
+             MM_ERR(MMPR3(si.dump(),sock,m_funcs.eText())) ; //  perror("  recv() failed");
+si.set_doa();     
+pnio->set_doa(); 
+//if (!si.nio()) {        
+//SockInfo& sim=m_sd.get(si.mate()); // m_socks[si.mate()];
+//sim.set_doa();   }           
+
+   //           close_conn = TRUE;
+            }
+            break;
+          }
+
+          /*****************************************************/
+          /* Check to see if the connection has been           */
+          /* closed by the client                              */
+          /*****************************************************/
+          if (rc == 0)
+          {
+            printf("  Connection closed\n");
+si.set_doa();      
+pnio->set_doa();
+//if (!si.nio()) {       
+//SockInfo& sim=m_sd.get(si.mate()); // m_socks[si.mate()];
+//sim.set_doa();   }           
+//            close_conn = TRUE;
+            break;
+          }
+
+} //  while (false) ;
+if (rct>0) { if (m_dumper.stuff()) { MM_ERR(m_dumper.output(1))} }
+//MM_ERR(" fick sht ") 
+
+
+return 0; 
+} // InputsNio
+// FIXME compiler complained unusedref 
+//SockInfo& sim=m_sd.get(si.mate()); // m_socks[sock];
+IdxTy InputsMate(const IdxTy sock, SockInfo & si)
+{
+
+IdxTy rct=0;
 StrTy xfer=m_funcs.peer(sock)+"..."+m_funcs.peer(si.mate());
 
 //MM_ERR(" input  conn ")
@@ -653,9 +794,10 @@ delete[] buffer;
             if (errno != EWOULDBLOCK)
             {
              MM_ERR(MMPR3(si.dump(),sock,m_funcs.eText())) ; //  perror("  recv() failed");
-si.set_doa();            
+si.set_doa();     
+if (!si.nio()) {        
 SockInfo& sim=m_sd.get(si.mate()); // m_socks[si.mate()];
-sim.set_doa();            
+sim.set_doa();   }           
 
    //           close_conn = TRUE;
             }
@@ -669,9 +811,10 @@ sim.set_doa();
           if (rc == 0)
           {
             printf("  Connection closed\n");
-si.set_doa();            
+si.set_doa();      
+if (!si.nio()) {       
 SockInfo& sim=m_sd.get(si.mate()); // m_socks[si.mate()];
-sim.set_doa();            
+sim.set_doa();   }           
 //            close_conn = TRUE;
             break;
           }
@@ -679,13 +822,73 @@ sim.set_doa();
 } //  while (false) ;
 if (rct>0) { if (m_dumper.stuff()) { MM_ERR(m_dumper.output(1))} }
 //MM_ERR(" fick sht ") 
+
 return 0;
-} // Inputs
+} // InputsMate
 
 IdxTy Outputs(const int sock)
 {
 //SockInfo& si=m_socks[sock];
 SockInfo& si=m_sd.get(sock); // m_socks[sock];
+bool is_nio=si.nio();
+//if (m_flow_msg) {MM_ERR(MMPR2(sock,is_nio))   } 
+if (is_nio) return OutputsNio(sock,si);
+return OutputsMate(sock,si);
+
+} // Outputs 
+IdxTy OutputsNio(const int sock, SockInfo & si)
+{
+NettleIO * pnio=si.pnio();
+auto & q=pnio->que();
+int rct=0; 
+while ( true)
+{
+// bytes send or an error 
+int rc=0;
+IdxTy len=0;
+do { 
+const char * buffer=0;
+// causes superfluous zero take on first iter 
+q.take(rc);
+q.contig(buffer,len);
+if (len==0) { if (rct&&m_flow_msg) MM_ERR(MMPR(rct)) return 0; }
+//if (m_flow_msg) MM_ERR(MMPR2(buffer,len))
+if (m_flow_msg) MM_ERR(MMPR(len))
+if (!si.encoded())
+rc = send(sock, buffer, len, 0);
+else rc=SSL_write(si.m_ssl, buffer, len);
+if (rc>0) rct+=rc;
+} while (rc>0);
+if (m_flow_msg) MM_ERR(" done with outloop "<<MMPR2(len,rc))
+  if (rc < 0)
+   {
+      if (errno != EWOULDBLOCK)
+      {
+        MM_ERR(MMPR3(si.dump(),pnio->dump(),m_funcs.eText())) ; 
+		si.set_doa();            pnio->set_doa();            
+      }
+else
+      {
+            if (m_flow_msg)  
+				MM_ERR("woudl block "<< MMPR3(si.dump(),pnio->dump(),m_funcs.eText())) ; // 
+          }
+break;
+	} // rc<0
+          if (len) if (rc == 0)
+          {
+			if(m_flow_msg) { MM_ERR(" closed sock "<<MMPR2(len,rc));
+             MM_ERR("final state  "<< MMPR3(si.dump(),pnio->dump(),m_funcs.eText())) ; } // 
+si.set_doa();            pnio->set_doa();            
+            break;
+          }
+}
+if (m_flow_msg) MM_ERR(MMPR(rct))
+
+return 0; 
+} // OutputsNio
+
+IdxTy OutputsMate(const int sock, SockInfo & si)
+{
 //SockInfo& sim=m_socks[si.mate()];
 const bool src=m_sd.has(si.mate());
 if (!src) { si.set_doa(); return 0; } 
@@ -737,9 +940,51 @@ si.set_doa();            sim.set_doa();
 }
 if (m_flow_msg) MM_ERR(MMPR(rct))
 return 0;
-} // Outputs
+
+} // OutputsMate
 
 
+
+bool SetupOutbound(const StrTy & n, const Pipe & p, const IdxTy sflags )
+{
+// setup mating outbound connection
+SockInfo si;
+p.setup(si);
+// this uses si.out_xxx for conn and sets si to output... 
+int sock=m_funcs.connect(si);
+//si.output(sock);
+// m_socks[sock]=si;
+si.sock(sock); m_sd.set(si); 
+IdxTy pos=m_fds.add_output(sock);
+if (false) { MM_ERR(MMPR2(pos,sock))}
+return (sock>0)?false:true;
+} // SetupOutbound
+
+bool SetupServer(const StrTy & n, const Pipe & p, const IdxTy sflags )
+{
+if (p.inbound_nio())
+{
+return SetupOutbound(n,p,sflags);
+} // inbound_nio
+int sock=m_funcs.server_socket4(p.ip_in,p.port_in,sflags);
+if (sock<0)
+{
+MM_ERR(" bad sok for pipe "<<MMPR3(n,p.dump(), m_funcs.eText()))
+return true ; // continue;
+} // bad sock 
+// create sock info and fds
+// don't use pos let fds manage... 
+IdxTy pos=m_fds.add_listen(sock);
+if ( false)  { MM_ERR(MMPR2(sock,pos)) } 
+SockInfo si;
+p.setup(si);
+si.listening(sock);
+// m_socks[sock]=si;
+si.sock(sock); m_sd.set(si); 
+
+return false; 
+
+} // SetupServer
 
 
 
@@ -750,23 +995,9 @@ const IdxTy sflags=0;
 // create all the listen sockets setup the fid table 
 MM_LOOP(ii,m_pipes)
 {
-const IdxTy n=(*ii).first;
+const StrTy& n=(*ii).first;
 const auto & p=(*ii).second;
-int sock=m_funcs.server_socket4(p.ip_in,p.port_in,sflags);
-if (sock<0)
-{
-MM_ERR(" bad sok for pipe "<<MMPR3(n,p.dump(), m_funcs.eText()))
-continue;
-} // bad sock 
-// create sock info and fds
-// don't use pos let fds manage... 
-IdxTy pos=m_fds.add_listen(sock);
-SockInfo si;
-p.setup(si);
-si.listening(sock);
-// m_socks[sock]=si;
-si.sock(sock); m_sd.set(si); 
-
+SetupServer(n,p,sflags);
 } // ii 
 } // SetupServers;
 // was going to let fds do this but do it here I guess 
@@ -796,18 +1027,35 @@ void Init(const StrTy  & sin,const IdxTy flags =0  )
 Init();
 BaseParams kvp(sin);
 } // Init 
+
+void Add(Pipe & p, const StrTy & sin, const IdxTy flags)
+{
+// allow over-writing of user names but not auto gen names 
+StrTy name="";
+BaseParams kvp(sin);
+kvp.get(name,"name");
+if (name=="") { Ss ss; ss<<"ADD"<<m_pipes.size();
+StrTy name=ss.str();
+while (m_pipes.find(name)!=m_pipes.end()) { name=name+"+"; } 
+}
+//m_pipes[m_pipes.size()]=p;
+m_pipes[name]=p;
+
+} // Add
+
 // there is no ctor with this is need not call init()
 void Init(const StrTy & sin, Creds & cred, const IdxTy flags)
 {
-BaseParams kvp(sin);
-_pipe p(sin,&cred,flags);
-m_pipes[m_pipes.size()]=p;
+//BaseParams kvp(sin);
+Pipe p(sin,&cred,flags);
+Add(p,sin,flags);
 } // Init
+
 void Init()
 {
 m_done=false;
-m_flow_msg=!true; 
-m_norm_err=!true; 
+m_flow_msg=true; 
+m_norm_err=true; 
 m_size=0;
 m_mu_sleep=10000;
 m_thread.tgt(this);

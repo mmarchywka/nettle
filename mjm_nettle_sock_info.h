@@ -20,6 +20,7 @@
 
 #include "mjm_ya_buffer.h"
 #include "mjm_nettle_creds.h"
+#include "mjm_nettle_io.h"
 
 
 #include <map> 
@@ -119,6 +120,7 @@ typedef std::vector<StrTy> Words;
 typedef mjm_string_base_params<Tr> BaseParams;
 typedef mjm_ya_buffer<Tr> Que;
 typedef mjm_nettle_creds<Tr>  Creds;
+typedef mjm_nettle_io<Tr>  NettleIO;
 static int serial() { static int i=0; i=i+1; return i; } 
 // API
 
@@ -131,6 +133,8 @@ int sock_session() const { return m_serial; }
 int sock() const { return m_sock;}
 int sock(const int s) { m_sock=s; return m_sock;}
 int mate() const { return m_mate;}
+bool nio() const { return m_pnio!=0; } 
+NettleIO * pnio() const { return m_pnio; } 
 int mate(const int s) { m_mate=s; return m_mate;}
 bool doa() const { return m_doa;}
 void set_doa() { m_doa=true; } 
@@ -150,6 +154,7 @@ bool listen() const { return m_type==LISTEN; }
 bool in() const { return m_type==IN; } 
 bool out() const { return m_type==OUT; } 
 bool encoded() const { if (in()) return enc_in&1; return enc_out&1; } 
+void shutdown() { Shutdown(); } 
 void load(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
 void load(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
 void save(const StrTy & fn,const StrTy &s) {Save(fn,s); }
@@ -227,6 +232,10 @@ port_out=0;
 m_que.size(1<<20);
 //m_would_block=0; //m_block_sz=0;
 m_doa=false;
+//m_in=NULL;
+//m_out=NULL;
+m_pnio=0;
+m_ssl=0; m_ctx=0; m_meth=0;
 } // Init
 Myt & Assign(const Myt& that) { 
 m_sock =that.m_sock;
@@ -244,7 +253,17 @@ m_que =that.m_que;
  m_meth =that.m_meth;
 m_ctx =that.m_ctx ; 
  m_ssl =that.m_ssl;
+//m_in=that.m_in;
+//m_out=that.m_out;
+m_pnio=that.m_pnio;
 return *this; }  // Assign 
+
+void Shutdown()
+{
+  if (m_ssl) {   SSL_shutdown(m_ssl); SSL_free(m_ssl); } 
+    close(m_sock); // Or sock for client
+ if ( m_ctx)   SSL_CTX_free(m_ctx);
+} // Shutdown 
 
 public: 
 
@@ -261,7 +280,8 @@ IdxTy port_in, port_out;
 Creds * m_creds;
 IdxTy enc_in,enc_out;
 //IdxTy enc;
-
+//NettleIO *m_in,*m_out;
+NettleIO *m_pnio;
 //int m_sock;
 //IdxTy m_count,m_iter;
 //char * m_buf;
@@ -272,7 +292,6 @@ Que  m_que;
 const SSL_METHOD *  m_meth;
     SSL_CTX *m_ctx ; //  SSL_CTX_new(method);
 SSL*  m_ssl;
-
 
 }; // mjm_nettle_sock_info
 
