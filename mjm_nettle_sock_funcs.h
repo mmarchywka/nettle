@@ -219,7 +219,7 @@ return newsock;
 int connect( SockInfo & si) const 
 { 
 int newsock= client_socket4(si.ip_out,si.port_out,0); 
-MM_ERR(MMPR3(__FUNCTION__,si.sock(),newsock))
+MM_ERR(MMPR3(__FUNCTION__,si.sock(),newsock)<<MMPR2(si.ip_out,si.port_out))
 if (newsock<0) { return newsock ; } 
 si.output(newsock);
 if (si.enc_out&1)

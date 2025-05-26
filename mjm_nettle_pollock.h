@@ -359,7 +359,14 @@ MM_LOOP(ii,dvec) {
 //const auto jj=(m_socks.find((*ii))); 
 const auto jj=(m_sock_map.find((*ii))); 
 //if (jj!=m_socks.end()) m_socks.erase(jj); 
-if (jj!=m_sock_map.end()) { (*jj).second.shutdown();   m_sock_map.erase(jj);  } 
+if (jj!=m_sock_map.end()) 
+{ 
+auto & s=(*jj).second; 
+s.shutdown();   
+// TODO should also see if mate is alive and then wait for que empty 
+const bool ok_to_drop=s.empty()||!s.nio_keep(); 
+if (ok_to_drop) m_sock_map.erase(jj);  
+} 
 else { MM_ERR(" wtffff "<<MMPR(*ii)) }
 }
 //MM_ERR(" done with soxx erase ")
@@ -533,6 +540,7 @@ return 0;
 
 } //Launch 
 enum {ERRMASK=POLLRDHUP|POLLHUP|POLLERR|POLLNVAL};
+enum {ERRMASKX=POLLHUP|POLLERR|POLLNVAL};
 void NoteEvents(int sock, int e)
 {
 {
@@ -549,6 +557,7 @@ SetupServers();
 int rc=0;
 int timeout=0; 
 const int errmask=ERRMASK;
+const int errmaskx=ERRMASKX;
 const int ePOLLIN=POLLIN|POLLRDNORM;
 const int ePOLLOUT=POLLOUT|POLLWRNORM;
 // keep things stable from ui during this time 
@@ -583,6 +592,10 @@ int e=fds.revents;
 // no nconst as status may change 
 SockInfo & si= m_sd.get(sock); // m_socks[sock];
 if (e&errmask)
+{
+if (m_norm_err) { MM_ERR("MAYBE ERRORS "<<MMPR2(sock,m_fds.event_str(e))) } 
+}
+if (e&errmaskx)
 {
 if (m_norm_err) { MM_ERR("ERRORS "<<MMPR2(sock,m_fds.event_str(e))) } 
 si.set_doa();
@@ -1054,8 +1067,8 @@ Add(p,sin,flags);
 void Init()
 {
 m_done=false;
-m_flow_msg=true; 
-m_norm_err=true; 
+m_flow_msg=!true; 
+m_norm_err=!true; 
 m_size=0;
 m_mu_sleep=10000;
 m_thread.tgt(this);

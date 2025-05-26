@@ -134,6 +134,7 @@ int sock() const { return m_sock;}
 int sock(const int s) { m_sock=s; return m_sock;}
 int mate() const { return m_mate;}
 bool nio() const { return m_pnio!=0; } 
+bool nio_keep() const { if (!nio()) return false; return !m_pnio->app_request_kill(); } 
 NettleIO * pnio() const { return m_pnio; } 
 int mate(const int s) { m_mate=s; return m_mate;}
 bool doa() const { return m_doa;}
@@ -153,6 +154,7 @@ void output(const int s) { m_type=OUT; m_sock=s; }
 bool listen() const { return m_type==LISTEN; } 
 bool in() const { return m_type==IN; } 
 bool out() const { return m_type==OUT; } 
+bool empty() const {return m_que.empty(); } 
 bool encoded() const { if (in()) return enc_in&1; return enc_out&1; } 
 void shutdown() { Shutdown(); } 
 void load(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }

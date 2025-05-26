@@ -147,6 +147,7 @@ IdxTy space() const {  // MM_ERR(" AFICK "<<MMPR2(m_sz,available()))
 IdxTy a=available();
 //if (a==m_sz) return 0; 
 return m_sz-a-1*0; } 
+bool empty() const { return (m_wr_ptr==m_rd_ptr)&&!m_full; } 
 IdxTy available() const  {
 
 EnterSerial(0);
@@ -154,6 +155,9 @@ if (m_full) { ExitSerial(0);   return m_sz; }
  const IdxTy n = Available(); 
 ExitSerial(0);
  return n; }
+
+void lock() { EnterSerial(0); }
+void release() { ExitSerial(0); }
 
 bool put(const Data c )
 {
@@ -163,10 +167,15 @@ m_wr_ptr=(m_wr_ptr+1)%m_sz;
 m_full= (m_wr_ptr==m_rd_ptr); //  m_full=true;
 return true;
 }
+// not mutex protected.... 
+void clear() { m_wr_ptr=0; m_rd_ptr=0; m_full=false; } 
 IdxTy write(const Data * p, const IdxTy sz,const IdxTy flags )
 {
-EnterSerial(0);
+// FIXME make these reentrant lol. 
+const bool get_lock=!Bit(flags,0);
+if (get_lock) EnterSerial(0);
 IdxTy n=m_sz-Available();
+if (n<sz) return 0; 
 IdxTy top=m_sz-m_wr_ptr;
 if (sz<n) n=sz;
 if (top>=n) { memcpy( m_tgt+m_wr_ptr, p,n) ; m_wr_ptr=(m_wr_ptr+n) % m_sz; }
@@ -179,10 +188,102 @@ m_wr_ptr=(m_wr_ptr+n) % m_sz;
 }
 m_full= (m_wr_ptr==m_rd_ptr); //  m_full=true;
 const IdxTy nowav = Available(); 
+if (nowav>m_max) m_max=nowav;
+if (get_lock) ExitSerial(0);
+return n;
+} // write 
+// no start char need to be able to toss first read lol. 
+IdxTy write_line(const StrTy & s, const char ceox) 
+{ return write_thing(s,'\r'); }
+IdxTy write_blob(const StrTy & s, const char ceox) 
+{ return write_thing(s,26); }
+// FIXME need an better flow exception etc handler... 
+IdxTy write_ragged(const Ragged &r, const IdxTy flags)
+{
+const bool serials=Bit(flags,0);
+const bool block=Bit(flags,1);
+Ss ss; ss<r.dump_ssv_unsafe(); // could include serial numbes but not worth it now... 
+IdxTy len=ss.str().length();
+IdxTy n=write_thing(ss.str(),26);
+return n;
+} // write_ragged
+IdxTy write_thing(const StrTy & s, const char ceox)
+{
+IdxTy rc=0;
+const IdxTy sz=s.length();
+Myt & q=(*this); // m_que();
+while (q.available()<(sz+1)) 
+{
+return 0;
+} // while 
+q.lock();
+rc=q.write(s.c_str(),sz,1);
+q.put(ceox); ++rc;
+q.release();
+return rc;
+} // write_line
+// keep overwriting old data useful to monitroing etc
+// only useful for fixed length samples with buffer multiple of
+// that size ... doh 
+// TODO text this lol 
+IdxTy write_wrap(const Data * p, const IdxTy sz,const IdxTy flags )
+{
+EnterSerial(0);
+IdxTy n=(sz>m_sz)?m_sz:sz;
+IdxTy space=Space();
+IdxTy pzed=0;
+// only write the last par of buffer if too big
+if (n!=sz) pzed=sz-n;
+//IdxTy n=m_sz-Available();
+IdxTy top=m_sz-m_wr_ptr;
+//if (sz<n) n=sz;
+if (top>=n) { memcpy( m_tgt+m_wr_ptr, p+pzed,n) ; m_wr_ptr=(m_wr_ptr+n) % m_sz; }
+else
+{
+ memcpy( m_tgt+m_wr_ptr, p+pzed,top) ; 
+ memcpy( m_tgt, p+top+pzed,n-top) ; 
+m_wr_ptr=(m_wr_ptr+n) % m_sz; 
+
+}
+if (n>space) m_rd_ptr=m_wr_ptr; 
+m_full= (m_wr_ptr==m_rd_ptr); //  m_full=true;
+const IdxTy nowav = Available(); 
 ExitSerial(0);
 if (nowav>m_max) m_max=nowav;
 return n;
-} // write 
+} // write_wrap
+
+IdxTy read_to(const OsTy & os, const char ceox)
+{
+IdxTy rc=0;
+if (empty()) return rc;  
+lock();
+IdxTy p=m_rd_ptr;
+IdxTy ssz=0;
+// full is ok to handle now... 
+do
+{
+// do not include in the thing but do drop it... 
+if (m_tgt[p]==ceox)
+{
+Data * d=0; IdxTy c1=0;
+contig(d,c1);
+if (c1>ssz) c1=ssz;
+os.write(d,c1);
+take(c1);
+ssz-=c1;
+if (ssz) { contig(d,c1);  if ( c1>ssz) c1=ssz; write(d,c1); take(c1); }
+take(1); // get the eof char... 
+release(); 
+return rc;
+}
+++ssz;
+inc(p,1);
+} while ( p!=m_wr_ptr );
+
+release();
+return rc;
+} // read_to
 void contig(const Data*& p, IdxTy &sz)
 {
 p=m_tgt+m_rd_ptr;
@@ -196,10 +297,11 @@ else sz=m_wr_ptr-m_rd_ptr;
 
 } // contig
 
-void take ( const IdxTy n) { m_rd_ptr=(m_rd_ptr+n) % m_sz;
+void inc(volatile IdxTy & p,const IdxTy n ) const { p=(p+n)%m_sz; } 
+void take( const IdxTy n) { inc(m_rd_ptr,n); //  m_rd_ptr=(m_rd_ptr+n) % m_sz;
 if (n) m_full=false;
  } // take
-IdxTy read ( Data * p, const IdxTy sz,const IdxTy flags )
+IdxTy read( Data * p, const IdxTy sz,const IdxTy flags )
 {
 const bool take=!Bit(flags,0);
 EnterSerial(0);
@@ -209,8 +311,8 @@ IdxTy rd2=m_rd_ptr+n;
 IdxTy szr=(rd2<=m_sz)? n:(m_sz-m_rd_ptr);
 memcpy(p,m_tgt+m_rd_ptr,szr);
 if (szr<n) memcpy(p+szr,m_tgt,n-szr);
-if (take) { m_rd_ptr=rd2 % m_sz; }
-if (n) m_full=false;
+if (take) { m_rd_ptr=rd2 % m_sz; 
+if (n) m_full=false; }
 ExitSerial(0);
 return n;
 } // read

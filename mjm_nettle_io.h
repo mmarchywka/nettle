@@ -33,6 +33,16 @@
 #include <stdlib.h>
 #include <stdint.h>
 
+#include <iostream>     // cout, cin, streambuf, hex, endl, sgetc, sbumpc
+#include <iomanip>      // setw, setfill
+#include <fstream>      // fstream
+
+// These inclusions required to set terminal mode.
+#include <termios.h>    // struct termios, tcgetattr(), tcsetattr()
+#include <stdio.h>
+
+
+
 
 /*
 <one line to give the program's name and a brief idea of what it does.>
@@ -125,18 +135,51 @@ public:
 mjm_nettle_io() {Init(); }
 mjm_nettle_io(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
 mjm_nettle_io(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
+// Que local user writes to to send data to remote app. 
 Que & que() { return m_que; } 
+// any data from remote socket kept here if not null 
+Que * that_que() { return m_that_que; } 
+// FIXME hazard 
+bool data() const 
+{ if (m_that_que==NULL) return false; return !m_that_que->empty(); }
+
+// data received from remote incoming to app 
 void new_data(Que & q, const IdxTy len) {
-MM_ERR(MMPR(q.available()))
-const IdxTy sz=q.available();
-char * d=new char[sz];
-MM_ILOOP(i,sz) { d[i]='x'; }
-q.read(d,sz,0);
-MM_ILOOP(i,sz) { std::cout.put(d[i]); }
-std::cout.flush();
-delete [] d;
+//MM_ERR(MMPR(q.available()))
+// TODO lock q and read without take for Echo... 
+m_that_que=&q;
+
+if (m_echo ) Echo(std::cout,q,len);
+
 }
-void set_doa() {MM_ERR(" net io do ") }
+// conn is dead called by polling routine. 
+void set_doa(const bool x=true ) {m_mate_doa=x; MM_ERR(" net io do ") }
+bool doa() const  {return m_mate_doa; }
+// polling thread should kill conn(s)
+bool app_request_kill() const { return m_req_kill; } 
+// restart remote outbound connsa or server listen if it dies 
+bool app_request_restart() const { return m_req_restart; } 
+
+void set_kill(const bool x=!true ) {m_req_kill=x; }
+void set_restart(const bool x=true ) {m_req_restart=x; }
+void set_echo(const bool x=true ) {m_echo=x; }
+// read and write lines, need to handle partial line from remote
+IdxTy write_line( const StrTy & s, const IdxTy flags)
+{
+IdxTy rc=0;
+Que & q=m_que();
+q.lock();
+q.write(s.c_str(),s.length(),1);
+q.put('\r');
+q.release();
+return rc;
+} // write_line
+
+
+
+
+void loop() { Loop(); } 
+
 void load(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
 void load(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
 void save(const StrTy & fn,const StrTy &s) {Save(fn,s); }
@@ -174,6 +217,62 @@ BaseParams kvp(sin);
 
 return sout;
 } // XXX_test
+void Echo(OsTy & os, Que & q, const IdxTy len) {
+//MM_ERR(MMPR(q.available()))
+const IdxTy sz=q.available();
+char * d=new char[sz];
+MM_ILOOP(i,sz) { d[i]='x'; }
+q.read(d,sz,0);
+MM_ILOOP(i,sz) { os.put(d[i]); }
+std::cout.flush();
+delete [] d;
+}
+void Loop()
+{
+auto & q=que();
+// https://stackoverflow.com/questions/22028142/read-only-one-char-from-cin
+MM_ERR(" start typing ")
+struct termios t; struct termios t_saved;
+    // Set terminal to single character mode.
+    tcgetattr(fileno(stdin), &t);
+    t_saved = t;
+    t.c_lflag &= (~ICANON & ~ECHO);
+    t.c_cc[VTIME] = 0;
+    t.c_cc[VMIN] = 1;
+    if (tcsetattr(fileno(stdin), TCSANOW, &t) < 0) {
+        perror("Unable to set terminal to single character mode");
+     //   return -1;
+    }
+// Read single characters from cin.
+    std::streambuf *pbuf = std::cin.rdbuf();
+    bool done = false;
+    while (!done) {
+ //       cout << "Enter an character (or esc to quit): " << endl;
+        char c;
+        if (pbuf->sgetc() == EOF) done = true;
+        c = pbuf->sbumpc();
+        if (c == 0x1b) {
+            done = true;
+        } else {
+q.lock();
+const bool ok=q.put(c);
+q.release();
+if (!ok) { MM_ERR(" que full droppping "<<MMPR(c)) }
+if (false) {             std::cout << "You entered character 0x" << std::setw(2) << std::setfill('0') << std::hex << int(c) << "'" << std::endl;
+ }
+std::cout<<c;
+
+      }
+    }
+//while (true) { char c=std::cin.get(); } // true
+    // Restore terminal mode.
+    if (tcsetattr(fileno(stdin), TCSANOW, &t_saved) < 0) {
+        perror("Unable to restore terminal mode");
+    //    return -1;
+    }
+MM_ERR(" done  typing ")
+} // Loop
+
 
 void Init(const Ragged & r, const IdxTy start=0, const IdxTy first=0, const IdxTy flags=0  )
 {
@@ -197,15 +296,23 @@ BaseParams kvp(sin);
 void Init()
 {
 m_que.size(1<<16);
-
+m_that_que=0;
+m_req_kill=false;
+m_req_restart=true;
+m_mate_doa=false;
+m_echo=true;
 } // Init
 
 
 
 // MEMBERS
 Que m_que;
+Que * m_that_que;
 
-
+volatile bool m_req_kill;
+volatile bool m_req_restart;
+volatile bool m_mate_doa;
+volatile bool m_echo;
 }; // mjm_nettle_io
 
 //////////////////////////////////////////////

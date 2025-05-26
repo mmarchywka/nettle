@@ -216,10 +216,13 @@ struct termios t;
         if (c == 0x1b) {
             done = true;
         } else {
+q.lock();
 const bool ok=q.put(c);
+q.release();
 if (!ok) { MM_ERR(" que full droppping "<<MMPR(c)) }
-            std::cout << "You entered character 0x" << std::setw(2) << std::setfill('0') << std::hex << int(c) << "'" << std::endl;
-  
+if (false) {             std::cout << "You entered character 0x" << std::setw(2) << std::setfill('0') << std::hex << int(c) << "'" << std::endl;
+ } 
+std::cout<<c; 
 
       }
     }
@@ -257,8 +260,11 @@ BaseParams kvp(sin);
 
 void Init()
 {
+//m_sin_out="encin=0;encout=0;portout=80;ipout=127.0.0.1" ;
 m_sin_out="encin=0;encout=0;portout=10000;ipout=127.0.0.1" ;
 m_sin_in="encin=0;encout=0;portin=10000;ipin=127.0.0.1" ;
+
+
 } // Init
 
 
