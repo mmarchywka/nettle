@@ -9,9 +9,9 @@
 #include "mjm_strings.h"
 #include "mjm_string_kvp.h"
 #include "mjm_worm_blob.h"
-#include "mjm_collections.h"
+//#include "mjm_collections.h"
 //#include "mjm_tokenized_collections.h"
-#include "mjm_canned_methods.h"
+//#include "mjm_canned_methods.h"
 
 //#include "mjm_pawnoff.h"
 #include "mjm_strings.h"
@@ -110,9 +110,9 @@ class mjm_str_2_num
 // TYPEDEF 
 enum { BAD=~0};
 //typedef mjm_canned_methods Canned;
-typedef mjm_ragged_table Ragged;
-typedef Ragged::Line Line;
-typedef std::map<StrTy, Ragged> RaggedMap;
+//typedef mjm_ragged_table Ragged;
+//typedef Ragged::Line Line;
+//typedef std::map<StrTy, Ragged> RaggedMap;
 typedef std::vector<StrTy> Words;
 typedef mjm_string_base_params<Tr> BaseParams;
 typedef char Tc;
@@ -123,13 +123,13 @@ typedef std::map<Tc, int> Map;
 public:
 mjm_str_2_num() {Init(); }
 mjm_str_2_num(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
-mjm_str_2_num(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
+//mjm_str_2_num(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
 int operator[](const Tc& c) const { const auto ii=m_m.find(c); if (ii!=m_m.end()) return (*ii).second;
 MM_ERR(" bad str char "<<MMPR2(c, int(c)))
  return BAD; } 
 void set_hex() {SetHex(); } 
 void load(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
-void load(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
+//void load(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
 void save(const StrTy & fn,const StrTy &s) {Save(fn,s); }
 
 StrTy xxx_test(const StrTy & sin, const IdxTy flags) 
@@ -137,8 +137,8 @@ StrTy xxx_test(const StrTy & sin, const IdxTy flags)
 ~mjm_str_2_num() {}
 StrTy dump(const IdxTy flags=0) { return Dump(flags); }
 private:
-int myatoi(const StrTy & s )const   { return mjm_canned_methods::myatoi(s.c_str()); }
-int myatoi(const char * c) const  { return mjm_canned_methods::myatoi(c); }
+//int myatoi(const StrTy & s )const   { return mjm_canned_methods::myatoi(s.c_str()); }
+//int myatoi(const char * c) const  { return mjm_canned_methods::myatoi(c); }
 static bool Bit(const IdxTy f, const IdxTy b) { return  ((f>>b)&1)!=0; }
 // should loop over map now 
 static void Set(IdxTy& f, const IdxTy b,const bool x) //const  
@@ -173,19 +173,19 @@ BaseParams kvp(sin);
 return sout;
 } // XXX_test
 
-void Init(const Ragged & r, const IdxTy start=0, const IdxTy first=0, const IdxTy flags=0  )
-{
-Init();
-const IdxTy sz=r.size();
-for(IdxTy i=start; i<sz; ++i)
-{
+//void Init(const Ragged & r, const IdxTy start=0, const IdxTy first=0, const IdxTy flags=0  )
+//{
+//Init();
+//const IdxTy sz=r.size();
+//for(IdxTy i=start; i<sz; ++i)
+//{
 //const Line & l=r[i];
 //const IdxTy len=l.size();
 
 
-}  // i 
+//}  // i 
 
-} // Init 
+//} // Init 
 void Init(const StrTy  & sin,const IdxTy flags =0  )
 {
 Init();
@@ -350,7 +350,7 @@ ss<<" MJM_STR_2_NUM "<<__DATE__<<" "<<__TIME__<<CRLF;
 MM_MSG(ss.str())
 
 }
-typedef mjm_ragged_table Ragged;
+//typedef mjm_ragged_table Ragged;
 
 #define CIP(n) atoi(cip.wif(n).c_str())
 #define CFP(n) atof(cip.wif(n).c_str())
@@ -381,11 +381,11 @@ if (cmd=="") continue;
 if (cmd=="about"){ about();  continue; } 
 CommandInterpretterParam  cip(li);
 
-if (cmd=="loadragged") {
- 	const IdxTy start=atoi(cip.wif(2).c_str()); 
-	const IdxTy first=atoi(cip.wif(3).c_str()); 
-	const IdxTy flags=atoi(cip.wif(4).c_str()); 
-Ragged r; r.load(cip.p1); x.load(r,start,first,flags); }
+//if (cmd=="loadragged") {
+// 	const IdxTy start=atoi(cip.wif(2).c_str()); 
+//	const IdxTy first=atoi(cip.wif(3).c_str()); 
+//	const IdxTy flags=atoi(cip.wif(4).c_str()); 
+//Ragged r; r.load(cip.p1); x.load(r,start,first,flags); }
 if (cmd=="load") {x.load(cip.p1,atoi(cip.p2.c_str())); }
 if (cmd=="save") {x.save(cip.p1,cip.p2); }
 if (cmd=="test") {StrTy xxx=x.xxx_test(cip.p1,CIP(2)); MM_ERR(MMPR(xxx))  }

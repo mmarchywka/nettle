@@ -231,7 +231,7 @@ const IdxTy len=l.size();
 StrTy Save_pipe( const IdxTy flags=0) const  
 {
 StrTy s;
-BaseParams kvp();
+BaseParams kvp;
 //kcp,encode(s,"",);
 return s; 
 } // Dump 
@@ -423,7 +423,7 @@ const IdxTy len=l.size();
 StrTy Save_sock_drawer( const IdxTy flags=0) const  
 {
 StrTy s;
-BaseParams kvp();
+BaseParams kvp;
 //kcp,encode(s,"",);
 return s; 
 } // Dump 

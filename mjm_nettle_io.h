@@ -137,8 +137,15 @@ mjm_nettle_io(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
 mjm_nettle_io(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
 // Que local user writes to to send data to remote app. 
 Que & que() { return m_que; } 
+IdxTy write_string(const StrTy &s) { return m_que.write_string(s); } 
 // any data from remote socket kept here if not null 
 Que * that_que() { return m_that_que; } 
+StrTy * read_remote_string() 
+{
+// TODO hazard here 
+if (m_that_que==0) return 0;
+return m_that_que->read_string();
+} 
 // FIXME hazard 
 bool data() const 
 { if (m_that_que==NULL) return false; return !m_that_que->empty(); }

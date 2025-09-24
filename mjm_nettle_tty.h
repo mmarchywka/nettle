@@ -4,6 +4,7 @@
 #include "mjm_globals.h"
 #include "mjm_thread_util.h"
 
+#include "mjm_canned_methods.h"
 //#include "mjm_block_matrix.h"
 #include "mjm_instruments.h"
 #include "mjm_strings.h"
@@ -11,7 +12,6 @@
 #include "mjm_worm_blob.h"
 #include "mjm_collections.h"
 //#include "mjm_tokenized_collections.h"
-#include "mjm_canned_methods.h"
 
 #include "mjm_pawnoff.h"
 #include "mjm_strings.h"
@@ -136,11 +136,38 @@ mjm_nettle_tty() {Init(); }
 mjm_nettle_tty(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
 mjm_nettle_tty(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
 void start() { Start(); }
+// _pipe fields :
+// ip len is for iin or out doh 
+// kvp.get(enc_in,"encin"); kvp.get(enc_out,"encout");
+//kvp.get(port_in,"portin"); kvp.get(port_out,"portout");
+//kvp.get(ip_in,"ipin"); kvp.get(ip_out,"ipout");
+// by default m_io alls Echo to dump remote data to cout  
+IdxTy send(const StrTy & s) { return m_io.write_string(s); }
+StrTy* read() { return m_io.read_remote_string(); }
+void echo(const IdxTy n) { m_io.set_echo(n!=0); } 
 void set_in(const StrTy & s) { m_sin_in=s;}
 void set_out(const StrTy & s) { m_sin_out=s;}
 void input() { m_sin=m_sin_in;}
 void output() { m_sin=m_sin_out;}
 void loop() { Loop(); } 
+void lloop() { Lloop(); } 
+// server
+// ./mjm_nettle_tty.out "set_in ipin=127.0.0.1;portin=12345;ipxxout=127.0.0.1;portout=12344;encin=0;encout=0" echo 0 input start 
+IdxTy start_server(const StrTy & ipv4, const IdxTy sock, const IdxTy flags=0)
+{
+BaseParams kvp;
+kvp.set("ipin",ipv4); kvp.set("portin",sock); kvp.set("encin",0);
+set_in(kvp.encoded()); 
+echo(0); input(); start(); return 0;
+} // start_server
+// ./mjm_nettle_tty.out "set_out ipxxin=127.0.0.1;portin=12345;ipout=127.0.0.1;portout=12345;encin=0;encout=0" echo 9 output start 
+IdxTy start_client(const StrTy & ipv4, const IdxTy sock, const IdxTy flags=0)
+{
+BaseParams kvp;
+kvp.set("ipout",ipv4); kvp.set("portout",sock); kvp.set("encout",0);
+set_out(kvp.encoded()); 
+echo(0); output(); start(); return 0;
+} // start_client
 
 void load(const StrTy & sin,const IdxTy flags) {Init(sin,flags); }
 void load(const Ragged & r,const IdxTy start, const IdxTy first,const IdxTy flags ) {Init(r,start,first,flags);}
@@ -187,6 +214,7 @@ m_poll.stats("cmd=dump-off",0);
 m_poll.add_pipe(sin, &(this->m_io),0);
 m_poll.launch(spec,0);
 }
+
 void Loop()
 {
 auto & q=m_io.que();
@@ -237,6 +265,64 @@ std::cout<<c;
 
 MM_ERR(" done  typing ")
 } // Loop
+
+void Lloop()
+{
+auto & q=m_io.que();
+m_io.set_echo(false);
+// https://stackoverflow.com/questions/22028142/read-only-one-char-from-cin
+MM_ERR(" start typing ")
+struct termios t;
+    struct termios t_saved;
+
+    // Set terminal to single character mode.
+    tcgetattr(fileno(stdin), &t);
+    t_saved = t;
+    t.c_lflag &= (~ICANON & ~ECHO);
+    t.c_cc[VTIME] = 0;
+    t.c_cc[VMIN] = 1;
+    if (tcsetattr(fileno(stdin), TCSANOW, &t) < 0) {
+        perror("Unable to set terminal to single character mode");
+     //   return -1;
+    }
+// Read single characters from cin.
+    std::streambuf *pbuf = std::cin.rdbuf();
+    bool done = false;
+    while (!done) {
+auto * str=m_io.read_remote_string();
+if (str) {  std::cout<<(*str)<<CRLF; std::cout.flush(); delete str; } 
+ //       cout << "Enter an character (or esc to quit): " << endl;
+        char c;
+// this fucker doesn't fucking work fuck 
+if (pbuf->in_avail()==0) { usleep(1000); continue; } 
+MM_ERR(" ASFCK "<<MMPR(pbuf->in_avail())) 
+if (pbuf->in_avail()== -1 ) { done=true; continue; } 
+        if (pbuf->sgetc() == EOF) done = true;
+        c = pbuf->sbumpc();
+        if (c == 0x1b) { done = true;
+        } else {
+q.lock();
+const bool ok=q.put(c);
+q.release();
+if (!ok) { MM_ERR(" que full droppping "<<MMPR(c)) }
+if (false) {             std::cout << "You entered character 0x" << std::setw(2) << std::setfill('0') << std::hex << int(c) << "'" << std::endl;
+ } 
+std::cout<<c; 
+
+      }
+    }
+
+//while (true) { char c=std::cin.get(); } // true
+
+    // Restore terminal mode.
+    if (tcsetattr(fileno(stdin), TCSANOW, &t_saved) < 0) {
+        perror("Unable to restore terminal mode");
+    //    return -1;
+    }
+
+MM_ERR(" done  typing ")
+} // Lloop
+
 
 
 void Init(const Ragged & r, const IdxTy start=0, const IdxTy first=0, const IdxTy flags=0  )
@@ -458,7 +544,12 @@ if (cmd=="loadragged") {
 	const IdxTy flags=atoi(cip.wif(4).c_str()); 
 Ragged r; r.load(cip.p1); x.load(r,start,first,flags); }
 if (cmd=="load") {x.load(cip.p1,atoi(cip.p2.c_str())); }
+if (cmd=="serve") {x.start_server(cip.p1,atoi(cip.p2.c_str())); }
+if (cmd=="client") {x.start_client(cip.p1,atoi(cip.p2.c_str())); }
+if (cmd=="echo") {x.echo(atoi(cip.p2.c_str())); }
 if (cmd=="save") {x.save(cip.p1,cip.p2); }
+if (cmd=="w") {x.send(cip.p1); }
+if (cmd=="r") {StrTy * p=x.read();if(p) { MM_ERR(MMPR(*p)) delete p; }  }
 if (cmd=="test") {StrTy xxx=x.xxx_test(cip.p1,CIP(2)); MM_ERR(MMPR(xxx))  }
 /*
 void start() { Start(); }
@@ -472,6 +563,7 @@ if (cmd=="start") {x.start(); MM_ERR("start") }
 if (cmd=="input") {x.input(); MM_ERR("input") }
 if (cmd=="output") {x.output(); MM_ERR("output") }
 if (cmd=="loop") {x.loop(); MM_ERR("loop") }
+if (cmd=="lloop") {x.lloop(); MM_ERR("loop") }
 if (cmd=="set_in") {x.set_in(cip.p1); MM_ERR(MMPR(cip.p1)) }
 if (cmd=="set_out") {x.set_out(cip.p1); MM_ERR(MMPR(cip.p1)) }
 
